@@ -32,6 +32,7 @@ import org.jetbrains.idea.maven.project.MavenProject;
 import org.jetbrains.idea.maven.project.MavenProjectChanges;
 import org.jetbrains.idea.maven.project.MavenProjectsManager;
 import org.jetbrains.idea.maven.server.NativeMavenProjectHolder;
+import org.slf4j.LoggerFactory;
 
 import javax.swing.*;
 import javax.swing.event.*;
@@ -40,6 +41,8 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.*;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.FocusAdapter;
@@ -87,6 +90,11 @@ public class GuiForm implements Disposable {
 	private JScrollPane noConflictsWarningLabelScrollPane;
 	private JTextPane noConflictsWarningLabel;
 	private JButton refreshButton;
+	/**
+	 * copy
+	 */
+	private JButton copyDependenciesButton;
+
 	private JSplitPane splitPane;
 	private SearchTextField searchField;
 	private JPanel leftPanelWrapper;
@@ -121,6 +129,11 @@ public class GuiForm implements Disposable {
 	private RightTreePopupHandler rightTreePopupHandler;
 	private LeftTreePopupHandler leftTreePopupHandler;
 	private ListPopupHandler leftPanelListPopupHandler;
+	public List<String> dependencieList=new ArrayList<>();
+
+	public List<String> getDependencieList() {
+		return dependencieList;
+	}
 
 	public GuiForm(@NotNull Project project, VirtualFile file, @NotNull MavenProject mavenProject) {
 		this.project = project;
@@ -163,7 +176,7 @@ public class GuiForm implements Disposable {
 				BrowserUtil.browse(e.getURL());
 			}
 		});
-		
+
 		final ActionListener radioButtonListener = new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
@@ -189,6 +202,16 @@ public class GuiForm implements Disposable {
 				refreshButton.setIcon(null);
 
 				initializeModel();
+				rootPanel.requestFocus();
+			}
+		});
+
+		copyDependenciesButton.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				copyDependenciesButton.setToolTipText(null);
+				copyDependenciesButton.setIcon(null);
+				copyDependencyList();
 				rootPanel.requestFocus();
 			}
 		});
@@ -322,6 +345,27 @@ public class GuiForm implements Disposable {
 		});
 	}
 
+	private void copyDependencyList() {
+		//********************复制剪贴板BEGIN***********************
+		// 获取依赖列表
+		List<String> dependencieList = getDependencieList();
+
+		// 将依赖列表转换为字符串并复制到剪贴板
+		StringBuilder sb = new StringBuilder();
+		for (String dependency : dependencieList) {
+			sb.append(dependency).append("\n\t");
+			LOG.info(dependency);
+		}
+		String clipboardContent = sb.toString();
+
+		// 使用Toolkit类中的方法将字符串复制到剪贴板
+		Toolkit toolkit = Toolkit.getDefaultToolkit();
+		Clipboard clipboard = toolkit.getSystemClipboard();
+		StringSelection stringSelection = new StringSelection(clipboardContent);
+		clipboard.setContents(stringSelection, null);
+		//********************复制剪贴板END***********************
+	}
+
 	private void createUIComponents() {
 		listDataModel = new MyDefaultListModel();
 		leftPanelList = new JBList((ListModel) listDataModel);
@@ -438,7 +482,7 @@ public class GuiForm implements Disposable {
 		falsePositive.setVisible(false);
 		rightTreePopupHandler.hidePopup();
 		leftTreePopupHandler.hidePopup();
-		
+
 		final Object selectedValue = leftPanelList.getSelectedValue();
 
 		dependencyTree = mavenProject.getDependencyTree();
@@ -480,6 +524,13 @@ public class GuiForm implements Disposable {
 			for (Map.Entry<String, List<MavenArtifactNode>> s : allArtifactsMap.entrySet()) {
 				if (contains(searchFieldText, s.getKey())) {
 					listDataModel.add(new MyListNode(s));
+					if (!s.getValue().isEmpty()){
+						MavenArtifactNode mavenArtifactNode= s.getValue().get(0);
+						String groupId = mavenArtifactNode.getArtifact().getGroupId();
+						String artifactId = mavenArtifactNode.getArtifact().getArtifactId();
+						String version = mavenArtifactNode.getArtifact().getVersion();
+						dependencieList.add(groupId+":"+artifactId+":"+version);
+					}
 				}
 			}
 			sortList();
