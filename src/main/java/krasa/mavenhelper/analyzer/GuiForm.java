@@ -33,6 +33,10 @@ import org.jetbrains.idea.maven.project.MavenProject;
 import org.jetbrains.idea.maven.project.MavenProjectChanges;
 import org.jetbrains.idea.maven.project.MavenProjectsManager;
 import org.jetbrains.idea.maven.server.NativeMavenProjectHolder;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 
 import javax.swing.*;
 import javax.swing.event.*;
@@ -47,6 +51,10 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.*;
@@ -94,7 +102,6 @@ public class GuiForm implements Disposable {
      * copy
      */
     private JButton copyDependenciesButton;
-
     private JSplitPane splitPane;
     private SearchTextField searchField;
     private JPanel leftPanelWrapper;
@@ -205,7 +212,7 @@ public class GuiForm implements Disposable {
                 rootPanel.requestFocus();
             }
         });
-
+        //copy按钮
         copyDependenciesButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -215,7 +222,6 @@ public class GuiForm implements Disposable {
                 rootPanel.requestFocus();
             }
         });
-
         myListSpeedSearch = new ListSpeedSearch(leftPanelList);
         searchField.addDocumentListener(new DocumentAdapter() {
             @Override
@@ -358,12 +364,135 @@ public class GuiForm implements Disposable {
         String clipboardContent = sb.toString();
 
         // 使用Toolkit类中的方法将字符串复制到剪贴板
-		Toolkit toolkit = Toolkit.getDefaultToolkit();
-		Clipboard clipboard = toolkit.getSystemClipboard();
-		StringSelection stringSelection = new StringSelection(clipboardContent);
-		clipboard.setContents(stringSelection, null);
-        Messages.showInfoMessage("COPY SUCCESS", "COPY");
+        Toolkit toolkit = Toolkit.getDefaultToolkit();
+        Clipboard clipboard = toolkit.getSystemClipboard();
+        StringSelection stringSelection = new StringSelection(clipboardContent);
+        clipboard.setContents(stringSelection, null);
+        //保存到csv
+        saveToCsv();
+        Messages.showInfoMessage("SUCCESS", "COPY");
+
         //********************复制剪贴板END***********************
+    }
+
+    /**
+     * 拼接license信息和jar来源地址
+     */
+    public static String getLicenseAndSourceUrl(String artifactId, String groupId, String version) {
+        //排除特定依赖，例如cn.com.jit开头的依赖
+        if (artifactId.contains("cn.com.jit")) {
+            return "";
+        }
+        String url = "https://central.sonatype.com/artifact/" + artifactId + "/" + groupId + "/" + version;
+        //许可信息
+        String license = "";
+        //来源地址
+        String sourceUrl = "";
+        // 使用Jsoup连接并获取页面内容 ， 重试3次，每次间隔2秒
+        Document doc = getDocumentWithRetry(url, 3, 2000);
+        if (doc != null) {
+            // 处理Document对象
+            // 这里需要根据你的页面结构调整选择器
+            // 假设License信息在<meta>标签的content属性中，且name属性为"license"
+            Elements metaTags = doc.select("li[data-test=license]");
+            if (!metaTags.isEmpty()) {
+                license = String.join(" + ", metaTags.eachText()).replace(",", "");
+            }
+
+            Element element = doc.select("a[data-test=project-url]").first();
+
+            if (element != null) {
+                sourceUrl = element.attr("href");
+            }
+
+            return license + "#@#" + sourceUrl;
+        } else {
+            System.out.println("Failed to retrieve the document after retries.");
+            return "error";
+        }
+    }
+
+    public static Document getDocumentWithRetry(String url, int retries, int delayMillis) {
+        Document doc = null;
+        int attempt = 0;
+
+        while (attempt < retries) {
+            try {
+                doc = Jsoup.connect(url)
+                        // 设置超时时间为20秒
+                        .timeout(20000)
+                        .get();
+                break;  // 成功获取页面内容后退出循环
+            } catch (IOException e) {
+                attempt++;
+                if (attempt < retries) {
+                    try {
+                        // 等待指定的延迟时间
+                        Thread.sleep(delayMillis);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        System.out.println("Thread was interrupted.");
+                        return null;
+                    }
+                } else {
+                    System.out.println("Failed to retrieve the document after " + retries + " attempts.");
+                }
+            }
+        }
+
+        return doc;
+    }
+
+    /**
+     * 保存到excel
+     */
+    private void saveToCsv() {
+        boolean license = false;
+        // 获取依赖列表
+        List<String> dependencieList = getDependencieList();
+        List<String> dependencyListWithLicense = new ArrayList<>();
+        dependencyListWithLicense.add("groupId,artifactId,version");
+        for (String dependency : dependencieList) {
+            String[] parts = dependency.split(":");
+            //排除特定依赖，例如cn.com.jit开头的依赖
+            if (parts[0].contains("cn.com.jit")) {
+                continue;
+            }
+            if (license) {
+                String licenseAndSourceUrl = getLicenseAndSourceUrl(parts[0], parts[1], parts[2]);
+                dependency = dependency.replace(":", ",") + "#@#" + licenseAndSourceUrl;
+                dependency = dependency.replace("#@#", ",");
+            } else {
+                dependency = dependency.replace(":", ",");
+            }
+            dependencyListWithLicense.add(dependency);
+        }
+        String filePath = project.getBasePath() + "/output.csv";
+        try (FileWriter writer = new FileWriter(filePath)) {
+            for (String row : dependencyListWithLicense) {
+                writer.append(row);
+                writer.append("\n");
+            }
+        } catch (IOException ex) {
+            Messages.showMessageDialog(project, "Failed to export CSV file: " + ex.getMessage(), "Error", Messages.getErrorIcon());
+        }
+    }
+
+    public static List<String> readIdentifiersFromCSV(String filePath) {
+        List<String> result = new ArrayList<>();
+        try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                StringTokenizer st = new StringTokenizer(line, ",");
+                if (st.hasMoreTokens()) {
+                    String firstColumnValue = st.nextToken();
+                    result.add(firstColumnValue);
+                }
+            }
+        } catch (IOException e) {
+            LOG.error(e);
+        }
+        return result;
     }
 
     private void createUIComponents() {
@@ -520,7 +649,7 @@ public class GuiForm implements Disposable {
             sortList();
             showNoConflictsLabel = isNoConflicts();
             leftPanelLayout.show(leftPanelWrapper, "list");
-        } else if (allDependenciesAsListRadioButton.isSelected()) {  //list
+        } else if (allDependenciesAsListRadioButton.isSelected()) {
             dependencieList.clear();
             for (Map.Entry<String, List<MavenArtifactNode>> s : allArtifactsMap.entrySet()) {
                 if (contains(searchFieldText, s.getKey())) {

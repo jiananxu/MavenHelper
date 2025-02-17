@@ -46,6 +46,8 @@ dependencies {
     implementation("org.apache.commons:commons-lang3:3.12.0")
 
     implementation("uk.com.robust-it:cloning:1.9.12")
+
+    implementation("org.jsoup:jsoup:1.15.3")
 }
 
 
